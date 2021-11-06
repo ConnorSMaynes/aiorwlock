@@ -65,71 +65,71 @@ class _RWLockCore:
     async def acquire_read(self) -> bool:
         me = _current_task(loop=self._loop)
 
-        if (me, self._RL) in self._owning or (me, self._WL) in self._owning:
-            self._r_state += 1
-            self._owning.append((me, self._RL))
-            await self._yield_after_acquire(self._RL)
-            return True
+        while True:
 
-        if (
-            not self._write_waiters
-            and self._r_state >= 0
-            and self._w_state == 0
-        ):
-            self._r_state += 1
-            self._owning.append((me, self._RL))
-            await self._yield_after_acquire(self._RL)
-            return True
+            if (me, self._RL) in self._owning or (me, self._WL) in self._owning:
+                self._r_state += 1
+                self._owning.append((me, self._RL))
+                await self._yield_after_acquire(self._RL)
+                return True
 
-        fut = self._loop.create_future()
-        self._read_waiters.append(fut)
-        try:
-            await fut
-            self._r_state += 1
-            self._owning.append((me, self._RL))
-            return True
+            if (
+                not self._write_waiters
+                and self._r_state >= 0
+                and self._w_state == 0
+            ):
+                self._r_state += 1
+                self._owning.append((me, self._RL))
+                await self._yield_after_acquire(self._RL)
+                return True
 
-        except asyncio.CancelledError:
-            self._wake_up()
-            raise
+            fut = self._loop.create_future()
+            self._read_waiters.append(fut)
+            try:
+                await fut
+                continue
 
-        finally:
-            self._read_waiters.remove(fut)
+            except asyncio.CancelledError:
+                self._wake_up()
+                raise
+
+            finally:
+                self._read_waiters.remove(fut)
 
     # Acquire the lock in write mode.  A 'waiting' count is maintained,
     # ensuring that 'readers' will yield to writers.
     async def acquire_write(self) -> bool:
         me = _current_task(loop=self._loop)
 
-        if (me, self._WL) in self._owning:
-            self._w_state += 1
-            self._owning.append((me, self._WL))
-            await self._yield_after_acquire(self._WL)
-            return True
-        elif (me, self._RL) in self._owning:
-            if self._r_state > 0:
-                raise RuntimeError('Cannot upgrade RWLock from read to write')
+        while True:
 
-        if self._r_state == 0 and self._w_state == 0:
-            self._w_state += 1
-            self._owning.append((me, self._WL))
-            await self._yield_after_acquire(self._WL)
-            return True
+            if (me, self._WL) in self._owning:
+                self._w_state += 1
+                self._owning.append((me, self._WL))
+                await self._yield_after_acquire(self._WL)
+                return True
+            elif (me, self._RL) in self._owning:
+                if self._r_state > 0:
+                    raise RuntimeError('Cannot upgrade RWLock from read to write')
 
-        fut = self._loop.create_future()
-        self._write_waiters.append(fut)
-        try:
-            await fut
-            self._w_state += 1
-            self._owning.append((me, self._WL))
-            return True
+            if self._r_state == 0 and self._w_state == 0:
+                self._w_state += 1
+                self._owning.append((me, self._WL))
+                await self._yield_after_acquire(self._WL)
+                return True
 
-        except asyncio.CancelledError:
-            self._wake_up()
-            raise
+            fut = self._loop.create_future()
+            self._write_waiters.append(fut)
+            try:
+                await fut
+                continue
 
-        finally:
-            self._write_waiters.remove(fut)
+            except asyncio.CancelledError:
+                self._wake_up()
+                raise
+
+            finally:
+                self._write_waiters.remove(fut)
 
     def release_read(self) -> None:
         self._release(self._RL)
